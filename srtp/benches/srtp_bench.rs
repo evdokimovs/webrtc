@@ -1,7 +1,8 @@
 use bytes::BytesMut;
 use criterion::{criterion_group, criterion_main, Criterion};
 use util::Marshal;
-use webrtc_srtp::{context::Context, protection_profile::ProtectionProfile};
+use webrtc_srtp::context::Context;
+use webrtc_srtp::protection_profile::ProtectionProfile;
 
 const RAW_RTCP: &[u8] = &[
     0x81, 0xc8, 0x00, 0x0b, 0xca, 0xfe, 0xba, 0xbe, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,

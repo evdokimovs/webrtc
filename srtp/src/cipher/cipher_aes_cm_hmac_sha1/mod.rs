@@ -15,7 +15,6 @@ mod opensslcipher;
 
 #[cfg(not(feature = "openssl"))]
 pub(crate) use ctrcipher::CipherAesCmHmacSha1;
-
 #[cfg(feature = "openssl")]
 pub(crate) use opensslcipher::CipherAesCmHmacSha1;
 

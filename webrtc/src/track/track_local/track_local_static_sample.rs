@@ -65,6 +65,7 @@ impl TrackLocalStaticSample {
         let mut internal = self.internal.lock().await;
 
         if internal.packetizer.is_none() || internal.sequencer.is_none() {
+            println!("Writer is just returned");
             return Ok(());
         }
 
@@ -74,6 +75,7 @@ impl TrackLocalStaticSample {
         );
 
         if all_paused {
+            println!("All paused");
             // Abort already here to not increment sequence numbers.
             return Ok(());
         }
@@ -130,6 +132,7 @@ impl TrackLocalStaticSample {
                 .write_rtp_with_extensions(&p, extensions)
                 .await
             {
+                println!("Error produced");
                 write_errs.push(err);
             }
         }

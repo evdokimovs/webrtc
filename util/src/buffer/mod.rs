@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod buffer_test;
 
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{timeout, Duration};
@@ -26,6 +28,8 @@ struct BufferInternal {
     count: usize,
     limit_count: usize,
     limit_size: usize,
+
+    wait_for_notified: AtomicU32,
 }
 
 impl BufferInternal {
@@ -61,6 +65,7 @@ impl BufferInternal {
             newsize = self.limit_size + 1
         }
 
+        // newsize = 100000;
         if newsize <= self.data.len() {
             return Err(Error::ErrBufferFull);
         }
@@ -99,10 +104,14 @@ impl BufferInternal {
 pub struct Buffer {
     buffer: Arc<Mutex<BufferInternal>>,
     notify: Arc<Notify>,
+    name: &'static str,
+    read_cnt: Arc<AtomicU64>,
+    write_cnt: Arc<AtomicU64>,
+    last_report_at: Arc<Mutex<Instant>>,
 }
 
 impl Buffer {
-    pub fn new(limit_count: usize, limit_size: usize) -> Self {
+    pub fn new(limit_count: usize, limit_size: usize, name: &'static str) -> Self {
         Buffer {
             buffer: Arc::new(Mutex::new(BufferInternal {
                 data: vec![],
@@ -115,8 +124,13 @@ impl Buffer {
                 count: 0,
                 limit_count,
                 limit_size,
+                wait_for_notified: AtomicU32::new(0),
             })),
             notify: Arc::new(Notify::new()),
+            name,
+            read_cnt: Arc::new(AtomicU64::new(0)),
+            write_cnt: Arc::new(AtomicU64::new(0)),
+            last_report_at: Arc::new(Mutex::new(Instant::now())),
         }
     }
 
@@ -125,6 +139,11 @@ impl Buffer {
     /// Note that the packet size is limited to 65536 bytes since v0.11.0
     /// due to the internal data structure.
     pub async fn write(&self, packet: &[u8]) -> Result<usize> {
+        self.write_cnt.fetch_add(1, Ordering::SeqCst);
+        // if self.last_report_at.lock().await.elapsed() > Duration::from_secs(10) {
+        //     println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
+        //     *self.last_report_at.lock().await = Instant::now();
+        // }
         if packet.len() >= 0x10000 {
             return Err(Error::ErrPacketTooBig);
         }
@@ -132,17 +151,21 @@ impl Buffer {
         let mut b = self.buffer.lock().await;
 
         if b.closed {
+            println!("Buffer is closed");
             return Err(Error::ErrBufferClosed);
         }
 
         if (b.limit_count > 0 && b.count >= b.limit_count)
             || (b.limit_size > 0 && b.size() + 2 + packet.len() > b.limit_size)
         {
+            println!("Error buffer full");
             return Err(Error::ErrBufferFull);
         }
 
         // grow the buffer until the packet fits
+        // TODO(evdokimovs): What the fuck?
         while !b.available(packet.len()) {
+            println!("Growing buffer");
             b.grow()?;
         }
 
@@ -168,6 +191,7 @@ impl Buffer {
         b.data[tail..end].copy_from_slice(&packet[..n]);
         b.tail += n;
         if b.tail >= b.data.len() {
+            // println!("Reached end of buffer, wrap around ({})", self.name);
             // we reached the end, wrap around
             let m = packet.len() - n;
             b.data[..m].copy_from_slice(&packet[n..]);
@@ -181,6 +205,11 @@ impl Buffer {
             b.subs = false;
         }
 
+        // println!(" read copied");
+        if self.last_report_at.lock().await.elapsed() > Duration::from_secs(3) {
+            println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
+            *self.last_report_at.lock().await = Instant::now();
+        }
         Ok(packet.len())
     }
 
@@ -189,6 +218,19 @@ impl Buffer {
     // Returns io.ErrShortBuffer is the packet is too small to copy the Write.
     // Returns io.EOF if the buffer is closed.
     pub async fn read(&self, packet: &mut [u8], duration: Option<Duration>) -> Result<usize> {
+        // if self.last_report_at.lock().await.elapsed() > Duration::from_secs(3) {
+        //     println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
+        //     *self.last_report_at.lock().await = Instant::now();
+        // }
+        // const PKT: &[u8] = &[144, 137, 169, 60, 126, 6, 130, 30, 113, 61, 188, 96, 190, 222, 0, 1, 16, 48, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        // if packet.len() >= PKT.len() {
+        //     packet[..PKT.len()].copy_from_slice(PKT);
+        //     return Ok(PKT.len());
+        // } else {
+        //     return Ok(0);
+        // }
+
+        self.read_cnt.fetch_add(1, Ordering::SeqCst);
         loop {
             {
                 // use {} to let LockGuard RAII
@@ -239,8 +281,15 @@ impl Buffer {
                     b.count -= 1;
 
                     if copied < count {
+                        // println!("buffer short while reading");
                         return Err(Error::ErrBufferShort);
                     }
+                    // println!(" read copied");
+                    if self.last_report_at.lock().await.elapsed() > Duration::from_secs(3) {
+                        println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
+                        *self.last_report_at.lock().await = Instant::now();
+                    }
+                    // println!("{:?}", packet);
                     return Ok(copied);
                 } else {
                     // Dont have data -> need wait
@@ -248,6 +297,7 @@ impl Buffer {
                 }
 
                 if b.closed {
+                    // println!("buffer closed error");
                     return Err(Error::ErrBufferClosed);
                 }
             }

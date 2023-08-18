@@ -68,7 +68,7 @@ impl Mux {
         // SRTP will constantly read from the endpoint and drop packets if it's full.
         let e = Arc::new(Endpoint {
             id,
-            buffer: Buffer::new(0, MAX_BUFFER_SIZE),
+            buffer: Buffer::new(0, MAX_BUFFER_SIZE, "mux/mod.rs:71"),
             match_fn: f,
             next_conn: Arc::clone(&self.next_conn),
             endpoints: Arc::clone(&self.endpoints),

@@ -5,10 +5,8 @@ use subtle::ConstantTimeEq;
 use util::marshal::*;
 
 use super::{Cipher, CipherInner};
-use crate::{
-    error::{Error, Result},
-    key_derivation::*,
-};
+use crate::error::{Error, Result};
+use crate::key_derivation::*;
 
 pub(crate) struct CipherAesCmHmacSha1 {
     inner: CipherInner,
@@ -79,7 +77,7 @@ impl Cipher for CipherAesCmHmacSha1 {
         // Encrypt the payload
         let nonce = generate_counter(
             header.sequence_number,
-            roc,
+            0,
             header.ssrc,
             &self.inner.srtp_session_salt,
         );
@@ -94,7 +92,8 @@ impl Cipher for CipherAesCmHmacSha1 {
             .unwrap();
 
         // Generate and write the auth tag.
-        let auth_tag = &self.inner.generate_srtp_auth_tag(&writer, roc)[..self.auth_tag_len()];
+        let auth_tag = &self.inner.generate_srtp_auth_tag(&writer, 0)[..self.auth_tag_len()];
+        // println!("Generated SRTP auth tag [{}]: {:?}", header.sequence_number, auth_tag);
         writer.extend_from_slice(auth_tag);
 
         Ok(Bytes::from(writer))
@@ -120,11 +119,13 @@ impl Cipher for CipherAesCmHmacSha1 {
 
         // Generate the auth tag we expect to see from the ciphertext.
         let expected_tag =
-            &self.inner.generate_srtp_auth_tag(cipher_text, roc)[..self.auth_tag_len()];
+            &self.inner.generate_srtp_auth_tag(cipher_text, 0)[..self.auth_tag_len()];
 
         // See if the auth tag actually matches.
         // We use a constant time comparison to prevent timing attacks.
         if actual_tag.ct_eq(expected_tag).unwrap_u8() != 1 {
+            // log::info!("Decrypting actual tag [{}]: {:?}, expected tag: {:?}", header.sequence_number, actual_tag, expected_tag);
+            // log::info!("ROC [{}]: {}", header.sequence_number, roc);
             return Err(Error::RtpFailedToVerifyAuthTag);
         }
 

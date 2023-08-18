@@ -42,7 +42,7 @@ pub mod dtls_transport_state;
 
 pub(crate) fn default_srtp_protection_profiles() -> Vec<SrtpProtectionProfile> {
     vec![
-        SrtpProtectionProfile::Srtp_Aead_Aes_128_Gcm,
+        // SrtpProtectionProfile::Srtp_Aead_Aes_128_Gcm,
         SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80,
     ]
 }

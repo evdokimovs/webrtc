@@ -3,6 +3,7 @@ use std::convert::TryInto;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -57,7 +58,7 @@ impl UDPMuxConn {
                 params,
                 closed_watch_tx: Mutex::new(Some(closed_watch_tx)),
                 addresses: Default::default(),
-                buffer: Buffer::new(0, 0),
+                buffer: Buffer::new(0, 0, "udp_mux_conn.rs:60"),
             }),
         }
     }
@@ -71,8 +72,10 @@ impl UDPMuxConn {
     /// encoding error.
     pub async fn write_packet(&self, data: &[u8], addr: SocketAddr) -> ConnResult<()> {
         // NOTE: Pion/ice uses Sync.Pool to optimise this.
+        let first_instant = Instant::now();
         let mut buffer = make_buffer();
         let mut offset = 0;
+        // println!("Make buffer: {}", first_instant.elapsed().as_micros());
 
         if (data.len() + MAX_ADDR_SIZE) > (RECEIVE_MTU + MAX_ADDR_SIZE) {
             return Err(Error::ErrBufferShort);
@@ -93,7 +96,9 @@ impl UDPMuxConn {
         buffer[offset..offset + 2].copy_from_slice(&(len as u16).to_le_bytes()[..]);
         offset += 2 + len;
 
+        let second_instant = Instant::now();
         self.inner.buffer.write(&buffer[..offset]).await?;
+        // println!("Write buffer: {}", second_instant.elapsed().as_micros());
 
         Ok(())
     }
@@ -275,6 +280,8 @@ impl Conn for UDPMuxConn {
     }
 
     async fn recv_from(&self, buf: &mut [u8]) -> ConnResult<(usize, SocketAddr)> {
+        // let bt = std::backtrace::Backtrace::capture();
+        // println!("{}", bt);
         self.inner.recv_from(buf).await
     }
 

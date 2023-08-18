@@ -1158,6 +1158,7 @@ impl AgentInternal {
         addr: SocketAddr,
     ) {
         if stun::message::is_message(buf) {
+            println!("Is STUN message");
             let mut m = Message {
                 raw: vec![],
                 ..Message::default()
@@ -1182,7 +1183,10 @@ impl AgentInternal {
                 self.get_name(),
                 //c.addr().await //from {}
             );
-        } else if let Err(err) = self.agent_conn.buffer.write(buf).await {
+        } else if let Err(err) = {
+            // println!("Write buffer to AgentConn buffer");
+            self.agent_conn.buffer.write(buf).await
+        } {
             // NOTE This will return packetio.ErrFull if the buffer ever manages to fill up.
             log::warn!("[{}]: failed to write packet: {}", self.get_name(), err);
         }
