@@ -165,7 +165,7 @@ impl Buffer {
         // grow the buffer until the packet fits
         // TODO(evdokimovs): What the fuck?
         while !b.available(packet.len()) {
-            println!("Growing buffer");
+            // println!("Growing buffer");
             b.grow()?;
         }
 
@@ -207,7 +207,7 @@ impl Buffer {
 
         // println!(" read copied");
         if self.last_report_at.lock().await.elapsed() > Duration::from_secs(3) {
-            println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
+            // println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
             *self.last_report_at.lock().await = Instant::now();
         }
         Ok(packet.len())
@@ -286,7 +286,7 @@ impl Buffer {
                     }
                     // println!(" read copied");
                     if self.last_report_at.lock().await.elapsed() > Duration::from_secs(3) {
-                        println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
+                        // println!("RW count ({}): R: {}, W: {}", self.name, self.read_cnt.load(Ordering::SeqCst), self.write_cnt.load(Ordering::SeqCst));
                         *self.last_report_at.lock().await = Instant::now();
                     }
                     // println!("{:?}", packet);

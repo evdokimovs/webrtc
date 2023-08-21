@@ -1158,7 +1158,7 @@ impl AgentInternal {
         addr: SocketAddr,
     ) {
         if stun::message::is_message(buf) {
-            println!("Is STUN message");
+            // println!("Is STUN message");
             let mut m = Message {
                 raw: vec![],
                 ..Message::default()

@@ -997,8 +997,9 @@ impl RTCPeerConnection {
                         // stable->SetLocal(offer)->have-local-offer
                         RTCSdpType::Offer => {
                             let check = {
-                                let last_offer = self.internal.last_offer.lock().await;
-                                sd.sdp != *last_offer
+                                // let last_offer = self.internal.last_offer.lock().await;
+                                // sd.sdp != *last_offer
+                                false
                             };
                             if check {
                                 Err(new_sdpdoes_not_match_offer)

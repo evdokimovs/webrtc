@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -18,6 +19,8 @@ lazy_static! {
         send_pkt: 0,
         last_report_at: Instant::now(),
     });
+
+    static ref ASD: Mutex<HashSet<u16>> = Mutex::new(HashSet::new());
 }
 
 #[async_trait]
@@ -31,45 +34,15 @@ impl Conn for UdpSocket {
     }
 
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        let inst = Instant::now();
-        // println!("BT: {:#?}", std::backtrace::Backtrace::capture());
-        let foo = Ok(self.recv_from(buf).await?);
-        if inst.elapsed().as_micros() > 100 {
-            println!("Elapsed in recv_from: {}", inst.elapsed().as_micros());
-        }
-        return foo;
+        Ok(self.recv_from(buf).await?)
     }
 
     async fn send(&self, buf: &[u8]) -> Result<usize> {
-        {
-            let mut calculator = CALCULATOR.lock().unwrap();
-            if calculator.last_report_at.elapsed() > Duration::from_secs(1) {
-                println!("Send (send) packets in 1 second: {}", calculator.send_pkt);
-                calculator.send_pkt = 0;
-                calculator.last_report_at = Instant::now();
-            }
-            calculator.send_pkt += 1;
-        }
-        Ok(self.send(buf).await.map_err(|e| {
-            println!("Error fired while sending: {:?}", e);
-            e
-        })?)
+        Ok(self.send(buf).await?)
     }
 
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize> {
-        {
-            let mut calculator = CALCULATOR.lock().unwrap();
-            if calculator.last_report_at.elapsed() > Duration::from_secs(1) {
-                println!("Send (sendto) packets in 1 second: {}", calculator.send_pkt);
-                calculator.send_pkt = 0;
-                calculator.last_report_at = Instant::now();
-            }
-            calculator.send_pkt += 1;
-        }
-        Ok(self.send_to(buf, target).await.map_err(|e| {
-            println!("Error fired while sending: {:?}", e);
-            e
-        })?)
+        Ok(self.send_to(buf, target).await?)
     }
 
     fn local_addr(&self) -> Result<SocketAddr> {

@@ -16,6 +16,7 @@ pub use udp_mux_conn::{UDPMuxConn, UDPMuxConnParams, UDPMuxWriter};
 mod udp_mux_test;
 
 mod socket_addr_ext;
+mod nack;
 
 use stun::attributes::ATTR_USERNAME;
 use stun::message::{is_message as is_stun_message, Message as STUNMessage};
@@ -163,12 +164,10 @@ impl UDPMuxDefault {
 
     fn start_conn_worker(self: Arc<Self>, mut closed_watch_rx: watch::Receiver<()>) {
         tokio::spawn(async move {
-            let mut buffer = [0u8; RECEIVE_MTU];
-
-            let mut cnt = 0;
             let loop_self = Arc::clone(&self);
 
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Vec<u8>, SocketAddr, usize)>();
+            // let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, SocketAddr, usize)>(100);
             tokio::spawn({
                 let loop_self = loop_self.clone();
                 async move {
@@ -197,63 +196,54 @@ impl UDPMuxDefault {
                 }
             });
 
-
-            let mut last_report_at = Instant::now();
+            let mut buffer = [0u8; RECEIVE_MTU];
+            let mut nacker = None;
+            let mut s = Instant::now();
+            let mut rps = 0;
 
             loop {
-                let inst = Instant::now();
                 let conn = &loop_self.params.conn;
-                cnt += 1;
-                if (cnt % 5000 == 0) {
-                    println!("Count of received packets: {}, collected withtin: {}", cnt, last_report_at.elapsed().as_millis());
-                    last_report_at = Instant::now();
-                }
 
-
-                // if let Ok(res) = conn.recv_from(&mut buffer) => {
                 match conn.recv_from(&mut buffer).await {
                     Ok((len, addr)) => {
-                        if inst.elapsed().as_micros() > 100 {
-                            println!("Receive send elapsed: {}", inst.elapsed().as_micros());
-                        }
-                        // println!("Receive elapsed: {}", inst.elapsed().as_micros());
-                        tx.send((buffer.to_vec(), addr, len));
 
-                        // let start = Instant::now();
-                        // // tokio::task::yield_now().await;
-                        // // // Find connection based on previously having seen this source address
-                        // let conn = {
-                        //     let address_map = loop_self
-                        //         .address_map
-                        //         .read();
-                        //
-                        //     address_map.get(&addr).map(Clone::clone)
-                        // };
-                        // //
-                        // // let conn = match conn {
-                        // //     // If we couldn't find the connection based on source address, see if
-                        // //     // this is a STUN mesage and if so if we can find the connection based on ufrag.
-                        // //     None if is_stun_message(&buffer) => {
-                        // //         loop_self.conn_from_stun_message(&buffer, &addr).await
-                        // //     }
-                        // //     s @ Some(_) => s,
-                        // //     _ => None,
-                        // // };
-                        // //
-                        //
-                        // tokio::spawn(async move {
-                        //     match conn {
-                        //         None => {
-                        //             log::trace!("Dropping packet from {}", &addr);
-                        //         }
-                        //         Some(conn) => {
-                        //             if let Err(err) = conn.write_packet(&buffer[..len], addr).await {
-                        //                 log::error!("Failed to write packet: {}", err);
-                        //             }
-                        //             // println!("Elapsed time: {}", start.elapsed().as_micros());
-                        //         }
-                        //     }
-                        // });
+                        let bytes = buffer[0..len].to_vec();
+
+                        rps += 1;
+                        if rps % 100 == 0 {
+                            if s.elapsed() > std::time::Duration::from_secs(1) {
+                                log::error!("RPS receive {}", rps);
+
+                                rps = 0;
+                                s = Instant::now();
+                            }
+                        }
+                        if ((bytes.len() >= 12) && (((bytes[0] & 0xFF) == 0x80)
+                            || ((bytes[0] & 0xFF) == 0xA0)
+                            || ((bytes[0] & 0xFF) == 0x90)
+                        )) {
+                            let seq = u16::from_be_bytes([bytes[2], bytes[3]]);
+                            if seq != 6 {
+                                if nacker.is_none() {
+                                    nacker = Some(nack::NackRegister::new(seq));
+                                }
+
+                                nacker.as_mut().unwrap().update_seq(seq);
+
+                                if seq % 200 == 0 {
+                                    for n in nacker.as_mut().unwrap().nack_reports().unwrap_or_default().unwrap_or_default() {
+                                        log::error!("nack to {:?}", n);
+                                    }
+                                }
+                            }
+                        }
+
+                        // nacker.unwrap_or(nack::NackRegister::new());
+                        // asdasdasdasdasdasdasdasd
+                        tx.send((bytes, addr, len));
+                        // if let Err(e) = tx.try_send((bytes, addr, len)) {
+                        //     log::error!("AZAZAZAZAZAZAZAZAZAZA");
+                        // }
                     }
                     Err(Error::Io(err)) if err.0.kind() == ErrorKind::TimedOut => {
                         println!("Timeout");
@@ -264,56 +254,6 @@ impl UDPMuxDefault {
                         break;
                     }
                 }
-                // }
-
-
-                // tokio::select! {
-                //     res = conn.recv_from(&mut buffer) => {
-                //         match res {
-                //             Ok((len, addr)) => {
-                //                 // tokio::task::yield_now().await;
-                //                 // // Find connection based on previously having seen this source address
-                //                 let conn = {
-                //                     let address_map = loop_self
-                //                         .address_map
-                //                         .read();
-                //
-                //                     address_map.get(&addr).map(Clone::clone)
-                //                 };
-                //                 //
-                //                 // let conn = match conn {
-                //                 //     // If we couldn't find the connection based on source address, see if
-                //                 //     // this is a STUN mesage and if so if we can find the connection based on ufrag.
-                //                 //     None if is_stun_message(&buffer) => {
-                //                 //         loop_self.conn_from_stun_message(&buffer, &addr).await
-                //                 //     }
-                //                 //     s @ Some(_) => s,
-                //                 //     _ => None,
-                //                 // };
-                //                 //
-                //
-                //                 match conn {
-                //                     None => {
-                //                         log::trace!("Dropping packet from {}", &addr);
-                //                     }
-                //                     Some(conn) => {
-                //                         if let Err(err) = conn.write_packet(&buffer[..len], addr).await {
-                //                             log::error!("Failed to write packet: {}", err);
-                //                         }
-                //                     }
-                //                 }
-                //             }
-                //             Err(Error::Io(err)) if err.0.kind() == ErrorKind::TimedOut => continue,
-                //             Err(err) => {
-                //                 log::error!("Could not read udp packet: {}", err);
-                //                 break;
-                //             }
-                //         }
-                //     }
-                //     _ = closed_watch_rx.changed() => {
-                //         return;
-                //     }
-                // }
             }
         });
     }
